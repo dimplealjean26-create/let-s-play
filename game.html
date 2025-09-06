@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Asteroid Dodger — Mini HTML Game</title>
+  <style>
+    :root{--bg:#0b1220;--card:#0f1724;--accent:#38bdf8;--muted:#9aa6b2}
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial; background:linear-gradient(180deg,#031021 0%, #071428 60%); color:#e6eef6}
+    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}
+    .card{width:min(880px,96vw);background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));border-radius:16px;padding:18px;box-shadow:0 8px 24px rgba(2,6,23,0.6);display:grid;grid-template-columns:1fr 360px;gap:18px}
+    @media (max-width:880px){.card{grid-template-columns:1fr;}}
+    header{display:flex;align-items:center;gap:12px}
+    h1{margin:0;font-size:1.15rem}
+    canvas{width:100%;height:540px;border-radius:10px;background:linear-gradient(180deg,#041426, #08304a);display:block}
+    .panel{padding:12px;background:rgba(255,255,255,0.02);border-radius:10px}
+    .controls{display:flex;flex-direction:column;gap:10px}
+    .row{display:flex;gap:8px;align-items:center}
+    button{appearance:none;border:0;padding:10px 12px;border-radius:8px;background:var(--accent);color:#032030;font-weight:700;cursor:pointer}
+    .muted{color:var(--muted);font-size:0.95rem}
+    .score{font-size:2rem;font-weight:800;color:#fff}
+    .small{font-size:0.9rem}
+    .touch-controls{display:flex;gap:8px;justify-content:space-around;margin-top:8px}
+    .touch-controls button{flex:1;background:rgba(255,255,255,0.06);color:var(--muted);padding:12px}
+    footer{font-size:0.8rem;color:var(--muted);margin-top:8px}
+    .kbd{display:inline-block;background:rgba(255,255,255,0.04);padding:6px 8px;border-radius:6px;margin-left:6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div>
+        <header>
+          <div style="width:44px;height:44px;border-radius:9px;background:linear-gradient(90deg,#60a5fa,#7dd3fc);display:flex;align-items:center;justify-content:center;font-weight:800;color:#042233">AD</div>
+          <div>
+            <h1>Asteroid Dodger</h1>
+            <div class="muted">Move left/right. Avoid asteroids. Survive as long as you can.</div>
+          </div>
+        </header>
+
+        <main style="margin-top:12px">
+          <canvas id="gameCanvas" width="800" height="540"></canvas>
+        </main>
+
+        <footer class="muted">Controls: ← → or A D, Tap buttons on mobile. Press Space to pause. Built with plain HTML/CSS/JS.</footer>
+      </div>
+
+      <aside class="panel">
+        <div class="controls">
+          <div class="row">
+            <div style="flex:1">
+              <div class="muted">Score</div>
+              <div id="score" class="score">0</div>
+              <div class="muted small">Best: <span id="best">0</span></div>
+            </div>
+            <div style="width:120px;text-align:right">
+              <div class="muted">Status</div>
+              <div id="status" class="small">Ready</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <button id="startBtn">Start</button>
+            <button id="restartBtn">Restart</button>
+            <button id="muteBtn">🔊</button>
+          </div>
+
+          <div style="margin-top:8px">
+            <div class="muted">Difficulty</div>
+            <input id="difficulty" type="range" min="1" max="5" value="2">
+            <div class="muted small">Faster ranges produce more asteroids and speed.</div>
+          </div>
+
+          <div style="margin-top:12px">
+            <div class="muted">How to play</div>
+            <ul class="muted small">
+              <li>Use arrow keys or A/D to move the ship left and right.</li>
+              <li>Collect power-ups (green) to gain brief shields or slow time.</li>
+              <li>The score increases over time and by dodging safely.</li>
+            </ul>
+          </div>
+
+          <div class="touch-controls" id="touchControls">
+            <button id="leftTouch">◀</button>
+            <button id="shootTouch">⬤</button>
+            <button id="rightTouch">▶</button>
+          </div>
+
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+  // Simple arcade: move a ship left/right to avoid falling asteroids.
+  (function(){
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let W = canvas.width, H = canvas.height;
+
+    // UI
+    const scoreEl = document.getElementById('score');
+    const bestEl = document.getElementById('best');
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const muteBtn = document.getElementById('muteBtn');
+    const difficultyInput = document.getElementById('difficulty');
+
+    // game state
+    let keys = {};
+    let score = 0;
+    let best = Number(localStorage.getItem('ad_best')||0);
+    bestEl.textContent = best;
+    let running = false;
+    let paused = false;
+    let mute = false;
+
+    // player
+    const player = { x: W/2, y: H - 70, w: 44, h: 28, speed: 6 };
+    // asteroids
+    let asteroids = [];
+    let powerups = [];
+    let spawnTimer = 0;
+    let spawnInterval = 60; // frames
+    let frames = 0;
+
+    // sounds (tiny oscillator-based)
+    function beeps(freq, duration=0.08){
+      if(mute) return;
+      try{
+        const ctxA = new (window.AudioContext||window.webkitAudioContext)();
+        const o = ctxA.createOscillator();
+        const g = ctxA.createGain();
+        o.type='sine'; o.frequency.value = freq;
+        o.connect(g); g.connect(ctxA.destination);
+        g.gain.setValueAtTime(0.05, ctxA.currentTime);
+        o.start();
+        setTimeout(()=>{ o.stop(); ctxA.close(); }, duration*1000);
+      }catch(e){}
+    }
+
+    function resizeCanvas(){
+      // Keep internal resolution fixed for simplicity; CSS scales it.
+      // Could be improved to match devicePixelRatio.
+    }
+
+    function reset(){
+      asteroids = [];
+      powerups = [];
+      score = 0;
+      frames = 0;
+      spawnTimer = 0;
+      player.x = W/2;
+      statusEl.textContent = 'Ready';
+      running = false;
+      paused = false;
+    }
+
+    function start(){
+      if(running) return;
+      running = true; paused = false; statusEl.textContent='Playing';
+      beeps(880,0.06);
+      requestAnimationFrame(loop);
+    }
+
+    function gameOver(){
+      running = false; statusEl.textContent = 'Game Over';
+      beeps(120,0.25);
+      if(score>best){ best = Math.floor(score); localStorage.setItem('ad_best',best); bestEl.textContent=best; }
+    }
+
+    function spawnAsteroid(){
+      const size = 18 + Math.random()*46;
+      const x = Math.random()*(W - size - 20) + 10;
+      const speed = 1 + Math.random()* (1 + Number(difficultyInput.value));
+      asteroids.push({x, y:-size, r:size/2, speed, angle: Math.random()*Math.PI*2});
+    }
+
+    function spawnPowerup(){
+      const x = 20 + Math.random()*(W-40);
+      powerups.push({x, y:-18, w:20, h:20, type: Math.random()>0.5?'shield':'slow', timer:0});
+    }
+
+    function update(){
+      if(!running || paused) return;
+      frames++;
+      // spawn logic
+      spawnTimer++;
+      const diff = Number(difficultyInput.value);
+      const interval = Math.max(24, spawnInterval - diff*8 - Math.floor(frames/1200));
+      if(spawnTimer>interval){ spawnAsteroid(); if(Math.random()<0.08) spawnPowerup(); spawnTimer=0; }
+
+      // move player
+      if(keys['ArrowLeft']||keys['a']) player.x -= player.speed;
+      if(keys['ArrowRight']||keys['d']) player.x += player.speed;
+      player.x = Math.max(10, Math.min(W - player.w - 10, player.x));
+
+      // update asteroids
+      for(let i=asteroids.length-1;i>=0;i--){
+        const a = asteroids[i];
+        a.y += a.speed + Math.sin(frames/20 + a.angle) * 0.7;
+        a.angle += 0.01;
+        if(a.y - a.r > H) { asteroids.splice(i,1); score += 10; beeps(600,0.02); }
+        // collision with player (simple AABB vs circle)
+        const closestX = Math.max(player.x, Math.min(a.x, player.x + player.w));
+        const closestY = Math.max(player.y, Math.min(a.y, player.y + player.h));
+        const dx = a.x - closestX;
+        const dy = a.y - closestY;
+        if(dx*dx + dy*dy < a.r*a.r){ gameOver(); }
+      }
+
+      // update powerups
+      for(let i=powerups.length-1;i>=0;i--){
+        const p = powerups[i]; p.y += 1.6;
+        if(p.y > H) powerups.splice(i,1);
+        if(p.y + p.h > player.y && p.y < player.y + player.h && p.x > player.x - 10 && p.x < player.x + player.w + 10){
+          // collect
+          if(p.type==='shield') { score += 50; beeps(1000,0.06); }
+          else { score += 30; beeps(700,0.06); }
+          powerups.splice(i,1);
+        }
+      }
+
+      // score grows slowly
+      if(frames % 30 === 0) score += 1;
+      scoreEl.textContent = Math.floor(score);
+    }
+
+    function draw(){
+      // background stars
+      ctx.clearRect(0,0,W,H);
+      // subtle starfield
+      for(let i=0;i<60;i++){
+        const x = (i*1234)%W + (frames/3)%W;
+        const y = (i*213)%H;
+        ctx.fillStyle = 'rgba(255,255,255,0.03)'; ctx.fillRect(x,y,1,1);
+      }
+
+      // draw asteroids
+      for(const a of asteroids){
+        ctx.save();
+        ctx.translate(a.x, a.y);
+        ctx.rotate(a.angle);
+        ctx.beginPath(); ctx.fillStyle='rgba(170,145,110,0.95)';
+        ctx.moveTo(-a.r, -a.r/2);
+        for(let i=0;i<7;i++){ ctx.lineTo(Math.cos(i/7*Math.PI*2)*a.r, Math.sin(i/7*Math.PI*2)*a.r); }
+        ctx.fill(); ctx.restore();
+      }
+
+      // draw powerups
+      for(const p of powerups){
+        ctx.fillStyle = p.type==='shield' ? 'rgba(102,255,178,0.95)' : 'rgba(120,180,255,0.95)';
+        ctx.fillRect(p.x - p.w/2, p.y - p.h/2, p.w, p.h);
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.strokeRect(p.x - p.w/2, p.y - p.h/2, p.w, p.h);
+      }
+
+      // draw player ship
+      ctx.save();
+      ctx.translate(player.x + player.w/2, player.y + player.h/2);
+      // ship body
+      ctx.beginPath(); ctx.fillStyle='rgba(56,189,248,0.95)';
+      ctx.moveTo(-player.w/2, player.h/2);
+      ctx.lineTo(0, -player.h);
+      ctx.lineTo(player.w/2, player.h/2);
+      ctx.closePath(); ctx.fill();
+      // cockpit
+      ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI*2); ctx.fillStyle='rgba(3,12,23,0.9)'; ctx.fill();
+      ctx.restore();
+
+      // HUD
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fillRect(6,6,140,28);
+      ctx.fillStyle = '#bfefff'; ctx.font = '14px system-ui, -apple-system, Roboto';
+      ctx.fillText('Score: ' + Math.floor(score), 12, 26);
+    }
+
+    function loop(){
+      update(); draw();
+      if(running) requestAnimationFrame(loop);
+    }
+
+    // input
+    window.addEventListener('keydown', e=>{ if(e.key===' '){ paused = !paused; statusEl.textContent = paused ? 'Paused' : 'Playing'; } keys[e.key]=true; });
+    window.addEventListener('keyup', e=>{ keys[e.key]=false; });
+
+    // touch buttons
+    document.getElementById('leftTouch').addEventListener('touchstart', e=>{ keys['ArrowLeft']=true; });
+    document.getElementById('leftTouch').addEventListener('touchend', e=>{ keys['ArrowLeft']=false; });
+    document.getElementById('rightTouch').addEventListener('touchstart', e=>{ keys['ArrowRight']=true; });
+    document.getElementById('rightTouch').addEventListener('touchend', e=>{ keys['ArrowRight']=false; });
+    document.getElementById('shootTouch').addEventListener('touchstart', e=>{ beeps(1200,0.06); });
+
+    // buttons
+    startBtn.addEventListener('click', ()=>{ start(); });
+    restartBtn.addEventListener('click', ()=>{ reset(); start(); });
+    muteBtn.addEventListener('click', ()=>{ mute = !mute; muteBtn.textContent = mute ? '🔈' : '🔊'; });
+
+    // keep canvas dimensions internal constant but can adapt if desired
+    window.addEventListener('resize', resizeCanvas);
+
+    // init
+    reset();
+    // draw initial frame
+    draw();
+
+  })();
+  </script>
+</body>
+</html>
